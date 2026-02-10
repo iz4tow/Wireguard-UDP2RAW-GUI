@@ -38,6 +38,9 @@ type Config struct {
 	// Windows MTU applied via netsh after tunnel is up.
 	// -1 means "not set / disabled"
 	ClientMTU int
+
+	// Web UI password (mandatory)
+	WebPassword string
 }
 
 type App struct {
@@ -63,7 +66,7 @@ var lastResult *LastResult
 
 func main() {
 	cfg := Config{
-		ClientMTU: -1, // ✅ default: disabled unless -MTU is explicitly provided
+		ClientMTU: -1, // default disabled unless -MTU provided
 	}
 
 	flag.StringVar(&cfg.ListenAddr, "listen", ":8080", "listen address")
@@ -78,8 +81,11 @@ func main() {
 	flag.StringVar(&cfg.OutputDir, "out", "/opt/wg-webui/clients", "output directory for generated client bundles")
 	flag.StringVar(&cfg.Udp2RawPassword, "udp2raw-pass", "Mongolia2026$", "udp2raw password (fixed)")
 
-	// ✅ Only -MTU exists; default disabled.
+	// Only -MTU exists; default disabled.
 	flag.IntVar(&cfg.ClientMTU, "MTU", -1, "OPTIONAL: Windows client MTU applied via netsh after tunnel is up (omit to disable)")
+
+	// NEW: mandatory web password
+	flag.StringVar(&cfg.WebPassword, "password", "", "MANDATORY: WebUI password (Basic Auth user=admin)")
 
 	flag.Parse()
 
@@ -89,6 +95,10 @@ func main() {
 
 	mustRoot()
 
+	if cfg.WebPassword == "" {
+		fmt.Println("[!] -password is mandatory (WebUI password). Example: -password \"MyStrongPass\"")
+		os.Exit(1)
+	}
 	if cfg.EndpointPublicIP == "" {
 		fmt.Println("[!] -endpoint-public-ip is required (public IP or DNS name).")
 		os.Exit(1)
@@ -110,19 +120,25 @@ func main() {
 	tmpl := template.Must(template.New("index").Parse(indexHTML))
 	app := &App{Cfg: cfg, Tmpl: tmpl}
 
-	http.HandleFunc("/", app.handleIndex)
-	http.HandleFunc("/add", app.handleAdd)
-	http.HandleFunc("/delete", app.handleDelete)
-	http.HandleFunc("/bundle/", app.handleBundleZip)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", app.handleIndex)
+	mux.HandleFunc("/add", app.handleAdd)
+	mux.HandleFunc("/delete", app.handleDelete)
+	mux.HandleFunc("/bundle/", app.handleBundleZip)
+
+	// Protect everything with Basic Auth
+	protected := app.basicAuthMiddleware(mux)
 
 	fmt.Printf("[+] WebUI listening on %s\n", cfg.ListenAddr)
 	fmt.Printf("[+] Output dir: %s\n", cfg.OutputDir)
+	fmt.Printf("[+] WebUI auth: Basic (user=admin, password=*** set via -password)\n")
 	if cfg.ClientMTU == -1 {
 		fmt.Printf("[+] Windows MTU: disabled (no -MTU provided)\n")
 	} else {
 		fmt.Printf("[+] Windows MTU: %d (enabled)\n", cfg.ClientMTU)
 	}
-	die("%v", http.ListenAndServe(cfg.ListenAddr, nil))
+
+	die("%v", http.ListenAndServe(cfg.ListenAddr, protected))
 }
 
 func mustRoot() {
@@ -135,6 +151,19 @@ func mustRoot() {
 func die(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
+}
+
+func (a *App) basicAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Basic Auth: user=admin, pass=cfg.WebPassword
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != a.Cfg.WebPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="DodgeVPN"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -247,12 +276,15 @@ func (a *App) handleAdd(w http.ResponseWriter, r *http.Request) {
 
 	ps1Path := filepath.Join(outDir, "install_all.ps1")
 	readmePath := filepath.Join(outDir, "README_WINDOWS.txt")
+	shPath := filepath.Join(outDir, "install_client.sh") // NEW
 
 	ps1 := a.renderWindowsInstallAllPS1(clientName)
 	readme := a.renderWindowsReadme(clientName)
+	sh := a.renderInstallClientSH(clientName) // NEW
 
 	_ = os.WriteFile(ps1Path, []byte(ps1), 0644)
 	_ = os.WriteFile(readmePath, []byte(readme), 0644)
+	_ = os.WriteFile(shPath, []byte(sh), 0755)
 
 	zipURL := "/bundle/" + clientName + ".zip"
 	lastResult = &LastResult{
@@ -335,11 +367,13 @@ func (a *App) handleBundleZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NEW: include install_client.sh
 	want := []string{
 		fmt.Sprintf("%s.conf", name),
 		fmt.Sprintf("%s_alt.conf", name),
 		fmt.Sprintf("%s.png", name),
 		"install_all.ps1",
+		"install_client.sh",
 		"README_WINDOWS.txt",
 	}
 
@@ -593,6 +627,42 @@ func (a *App) listClients(confText string) []ClientRow {
 	return out
 }
 
+// NEW: install_client.sh included in the ZIP.
+// This is useful if the user downloaded the bundle on Linux/macOS or via Git Bash/WSL on Windows.
+// It extracts and runs the PowerShell installer via powershell.exe if available (Git Bash/WSL),
+// otherwise it prints clear instructions.
+func (a *App) renderInstallClientSH(clientName string) string {
+	return fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+
+CLIENT="%s"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR"
+
+echo "[+] DodgeVPN client bundle for: $CLIENT"
+echo "[+] Files are in: $DIR"
+echo
+
+if command -v powershell.exe >/dev/null 2>&1; then
+  echo "[+] Detected powershell.exe (Git Bash / WSL). Running Windows installer..."
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$DIR\\install_all.ps1"
+  exit 0
+fi
+
+if command -v pwsh >/dev/null 2>&1; then
+  echo "[+] Detected pwsh (PowerShell 7). Running installer..."
+  pwsh -NoProfile -ExecutionPolicy Bypass -File "$DIR/install_all.ps1"
+  exit 0
+fi
+
+echo "[!] No PowerShell detected in this environment."
+echo
+echo "On Windows, open an Administrator PowerShell in this folder and run:"
+echo "  powershell -NoProfile -ExecutionPolicy Bypass -File .\\install_all.ps1"
+echo
+`, clientName)
+}
+
 func (a *App) renderWindowsInstallAllPS1(clientName string) string {
 	wireguardMSI := "https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi"
 	npcapEXE := "https://npcap.com/dist/npcap-1.87.exe"
@@ -775,7 +845,7 @@ func (a *App) renderWindowsInstallAllPS1(clientName string) string {
 	ps.WriteString("  $ws = Get-Service -Name $wgSvc -ErrorAction SilentlyContinue\n")
 	ps.WriteString("  if ($ws.Status -ne 'Running') { throw 'WireGuard tunnel service not running' }\n\n")
 
-	// ✅ Optional MTU via netsh (only if -MTU provided)
+	// Optional MTU via netsh (only if -MTU provided)
 	ps.WriteString(fmt.Sprintf("  $desiredMtu = %d\n", mtu))
 	ps.WriteString("  if ($desiredMtu -ge 0) {\n")
 	ps.WriteString("    Write-Host 'Applying MTU via netsh (post-up)...'\n")
@@ -834,6 +904,9 @@ func (a *App) renderWindowsReadme(clientName string) string {
 		"Run as Administrator:",
 		"  powershell -NoProfile -ExecutionPolicy Bypass -File .\\install_all.ps1",
 		"",
+		"Alternative (Linux/macOS/Git Bash/WSL):",
+		"  ./install_client.sh",
+		"",
 		"Logs:",
 		"- install.log (full output transcript)",
 		"- udp2raw.log / udp2raw.err.log",
@@ -851,7 +924,7 @@ var indexHTML = `
 <html>
 <head>
   <meta charset="utf-8">
-  <title>WireGuard + udp2raw WebUI</title>
+  <title>DodgeVPN (WireGuard + udp2raw)</title>
   <style>
     body { font-family: sans-serif; margin: 30px; max-width: 1080px; }
     .box { border: 1px solid #ccc; padding: 16px; border-radius: 12px; margin-bottom: 18px; }
@@ -866,7 +939,7 @@ var indexHTML = `
   </style>
 </head>
 <body>
-  <h2>WireGuard + udp2raw WebUI</h2>
+  <h2>DodgeVPN WebUI</h2>
 
   <div class="box">
     <p><b>Interface:</b> <code>{{.WGIf}}</code></p>

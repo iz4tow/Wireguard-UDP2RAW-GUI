@@ -7,7 +7,7 @@ After client creation it will provide a Download ZIP bundle to automatically con
 ![alt text](./img.png)
 
 ## How to install on Ubuntu Server
-### Compile WebUI
+### Manually build WebUI
 This part is written in go, so you will need Go compiler installed.
 On Ubuntu:
 ```
@@ -22,12 +22,26 @@ go mod tidy
 go build -ldflags="-s -w" -trimpath wg_GUI_udp2raw_MTU.go
 ```
 
+### Automatically build tarball
+This part is written in go, so you will need Go compiler installed.
+On Ubuntu:
+```
+sudo add-apt-repository ppa:longsleep/golang-backports
+sudo apt update
+sudo apt install golang-go -y
+./build.sh
+```
+It will create DodgeVPN.tar.gz
+
 ### Install the system
-- Copy wg_GUI_udp2raw_MTU and install_wg_with_udp2raw.sh on the target Ubuntu Server
+- Copy DodgeVPN.tar.gz to the server
+- untar with: `tar zxvf DodgeVPN.tar.gz`
+- `cd DodgeVPN`
 - Run as root ./install_wg_with_udp2raw.sh
 - Complete the installation, the script will install and configure: wireguard, udp2raw and the webUI
 - reboot
 - You will find the webUI at http://your server IP
+- Login with admin/<password> (the password is set during installation)
 
 ### Install a client
 - Navigate to the webpage
