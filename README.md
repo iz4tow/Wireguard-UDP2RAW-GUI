@@ -50,4 +50,5 @@ It will create DodgeVPN.tar.gz
 ![alt text](./img2.png)
 - Copy the ZIP file to the target client
 - Unzip the downloaded file
-- If it's a Windows OS right click on "install.ps1" - Run with powershell
+    - If it's a Windows OS right click on "install.ps1" - Run with powershell
+    - If it's a Ubuntu OS run "install_client.sh" as root
