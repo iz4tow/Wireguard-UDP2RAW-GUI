@@ -29,3 +29,11 @@ go build -ldflags="-s -w" -trimpath wg_GUI_udp2raw_MTU.go
 - reboot
 - You will find the webUI at http://your server IP
 
+### Install a client
+- Navigate to the webpage
+- Set the client name and click on "Add client"
+- A green box will appear on the bottom. Click on "Download ZIP bundle"
+![alt text](./img2.png)
+- Copy the ZIP file to the target client
+- Unzip the downloaded file
+- If it's a Windows OS right click on "install.ps1" - Run with powershell
