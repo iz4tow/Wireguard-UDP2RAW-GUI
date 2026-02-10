@@ -2,7 +2,9 @@
 ## Description
 This project allow you to install and configure a Wireguard server intergrated with udp2raw to dodge censorship filters and firewalls.
 
-From the webUI you can add and delete clients very easily
+From the webUI you can add and delete clients very easily.
+After client creation it will provide a Download ZIP bundle to automatically configure Windows (one-click install)
+![alt text](./img.png)
 
 ## How to install on Ubuntu Server
 ### Compile WebUI
