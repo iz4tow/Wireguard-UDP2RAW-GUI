@@ -25,6 +25,5 @@ go build -ldflags="-s -w" -trimpath wg_GUI_udp2raw_MTU.go
 - Run as root ./install_wg_with_udp2raw.sh
 - Complete the installation, the script will install and configure: wireguard, udp2raw and the webUI
 - reboot
-- You will find the webUI at http://<your server IP>
-- After that visit <>
+- You will find the webUI at http://your server IP
 
