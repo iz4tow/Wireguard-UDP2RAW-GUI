@@ -29,6 +29,9 @@ if [[ ! -f "${GO_FILE}" ]]; then
   exit 1
 fi
 
+rm -f go.mod
+go mod init DodgeVPN
+go mod tidy
 go build -ldflags="-s -w" -trimpath -o "${BIN_NAME}" "${GO_FILE}"
 
 echo "[+] Moving binary into ${APP_NAME}/ ..."
